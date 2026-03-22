@@ -21,6 +21,8 @@ from modules.portscan import scan_ports, PortResult
 from modules.vuln_scanner import run_template_scan, TemplateScanner
 from modules.takeover import run_takeover_check, TakeoverDetector
 from modules.cloud import run_cloud_scan, CloudScanner
+from modules.xss_scanner import run_xss_scan, XSSScanner
+from modules.sqli_scanner import run_sqli_scan, SQLiScanner
 from utils.report_gen import generate_html_report
 from core.analyzer import Analyzer
 from core.scorer import AdvancedScorer
@@ -83,6 +85,7 @@ class ReconPipeline:
         await self._step5_directory_fuzz()
         await self._step6_vulnerability_check()
         await self._step6b_template_scanning()
+        await self._step6c_dynamic_vuln_scanning()
         await self._step7_analysis()
         
         self._generate_output_files()
@@ -392,6 +395,27 @@ class ReconPipeline:
             if findings:
                 rows = [[f.vuln_type[:30], f.url[:50], f.severity.upper()] for f in findings]
                 self.logger.print_table("Template Findings", ["Type", "URL", "Severity"], rows, "cyan")
+
+    async def _step6c_dynamic_vuln_scanning(self):
+        self.logger.section("Step 6c: Dynamic Vulnerability Scanning (XSS/SQLi)")
+        
+        # Test endpoints with parameters
+        if self.endpoints:
+            # Run XSS Scan
+            xss_findings = await run_xss_scan(self.endpoints, logger=self.logger)
+            self.vuln_findings.extend(xss_findings)
+            
+            # Run SQLi Scan
+            sqli_findings = await run_sqli_scan(self.endpoints, logger=self.logger)
+            self.vuln_findings.extend(sqli_findings)
+            
+            total_dynamic = []
+            total_dynamic.extend(xss_findings)
+            total_dynamic.extend(sqli_findings)
+            
+            if total_dynamic:
+                rows = [[f.url[:50], f.vuln_type, f.severity.upper()] for f in total_dynamic]
+                self.logger.print_table("Dynamic Findings", ["URL", "Type", "Severity"], rows, "red")
     
     async def _step7_analysis(self):
         self.logger.section("Step 7: Analysis & Prioritization")
@@ -495,62 +519,42 @@ class ReconPipeline:
         self.logger.info(f"    Low: {stats.get('low', 0)}")
     
     def _generate_output_files(self):
-        base_name = self.domain.replace('.', '_')
+        self.logger.section("Step 8: Generating Output Files")
         
+        base_name = self.domain.replace('.', '_')
+        report_data = self._compile_results()
+        
+        # Save JSON results
+        json_file = self.output_dir / f"{base_name}_results.json"
+        with open(json_file, 'w') as f:
+            json.dump(report_data, f, indent=4)
+        self.logger.success(f"Full JSON results saved to: {json_file}")
+        
+        # Save Text results
         subdomains_file = self.output_dir / f"{base_name}_subdomains.txt"
         with open(subdomains_file, 'w') as f:
-            f.write('\n'.join(sorted(self.subdomains)))
+            f.write('\n'.join(self.subdomains))
         self.logger.success(f"Subdomains saved to: {subdomains_file}")
         
-        live_file = self.output_dir / f"{base_name}_live.txt"
+        live_file = self.output_dir / f"{base_name}_live_hosts.txt"
         with open(live_file, 'w') as f:
-            for h in self.live_hosts:
-                f.write(f"{h.url}\n")
+            f.write('\n'.join([h.url for h in self.live_hosts]))
         self.logger.success(f"Live hosts saved to: {live_file}")
         
-        endpoints_file = self.output_dir / f"{base_name}_endpoints.txt"
-        with open(endpoints_file, 'w') as f:
-            for ep in self.endpoints:
-                params = ','.join(ep.get('params', []))
-                f.write(f"{ep.get('url', '')} | {ep.get('method', 'GET')} | params: {params}\n")
-        self.logger.success(f"Endpoints saved to: {endpoints_file}")
-        
-        if self.js_endpoints:
-            js_endpoints_file = self.output_dir / f"{base_name}_js_endpoints.txt"
-            with open(js_endpoints_file, 'w') as f:
-                for ep in self.js_endpoints:
-                    f.write(f"{ep.get('path', '')} | {ep.get('method', 'GET')}\n")
-            self.logger.success(f"JS endpoints saved to: {js_endpoints_file}")
-        
-        vulns_file = self.output_dir / f"{base_name}_vulns.json"
-        vulns_data = []
-        for f in self.vuln_findings:
-            vulns_data.append({
-                'type': f.vuln_type,
-                'url': f.url,
-                'severity': f.severity,
-                'description': f.description,
-                'evidence': f.evidence,
-                'recommendation': f.recommendation,
-                'parameter': f.parameter
-            })
-        with open(vulns_file, 'w') as f:
-            json.dump(vulns_data, f, indent=2)
-        self.logger.success(f"Vulnerabilities saved to: {vulns_file}")
-        
-        report_file = self.output_dir / f"{base_name}_report.json"
-        report_data = self._compile_results()
-        with open(report_file, 'w') as f:
-            json.dump(report_data, f, indent=2, default=str)
-        self.logger.success(f"Full report saved to: {report_file}")
-        
+        vulns_file = self.output_dir / f"{base_name}_vulnerabilities.txt"
+        if self.vuln_findings:
+            with open(vulns_file, 'w') as f:
+                for v in self.vuln_findings:
+                    f.write(f"[{v.severity.upper()}] {v.vuln_type}: {v.url}\n")
+            self.logger.success(f"Vulnerabilities saved to: {vulns_file}")
+            
         if self.open_ports:
             ports_file = self.output_dir / f"{base_name}_ports.txt"
             with open(ports_file, 'w') as f:
                 for host, ports in self.open_ports.items():
                     f.write(f"Host: {host}\n")
                     for p in ports:
-                        f.write(f"  - {p.port}/{p.service} ({p.state}) {p.banner}\n")
+                        f.write(f"  - Port {p.port} ({p.service}): {p.state}\n")
             self.logger.success(f"Open ports saved to: {ports_file}")
             
         if self.wayback_urls:
@@ -570,26 +574,26 @@ class ReconPipeline:
     def _compile_results(self) -> Dict[str, Any]:
         return {
             'domain': self.domain,
-            'timestamp': datetime.now().isoformat(),
-            'subdomains': self.subdomains,
-            'wayback_urls': self.wayback_urls,
-            'open_ports': {
-                host: [
-                    {
-                        'port': p.port,
-                        'service': p.service,
-                        'state': p.state,
-                        'banner': p.banner
-                    } for p in ports
-                ] for host, ports in self.open_ports.items()
-            },
+            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            'subdomains': list(self.subdomains),
             'live_hosts': [
                 {
                     'url': h.url,
                     'status': h.status,
                     'title': h.title,
-                    'technologies': h.technologies
+                    'technologies': getattr(h, 'technologies', [])
                 } for h in self.live_hosts
+            ],
+            'vuln_findings': [
+                {
+                    'type': f.vuln_type,
+                    'url': f.url,
+                    'severity': f.severity,
+                    'description': f.description,
+                    'parameter': getattr(f, 'parameter', None),
+                    'evidence': getattr(f, 'evidence', ""),
+                    'recommendation': getattr(f, 'recommendation', "")
+                } for f in self.vuln_findings
             ],
             'endpoints': [
                 {
@@ -597,20 +601,12 @@ class ReconPipeline:
                     'method': ep.get('method', 'GET'),
                     'params': ep.get('params', []),
                     'has_params': ep.get('has_params', False),
-                    'is_sensitive': ep.get('is_sensitive', False),
-                    'sources': ep.get('sources', [])
+                    'source': ep.get('source', 'crawler')
                 } for ep in self.endpoints
             ],
             'js_endpoints': self.js_endpoints,
-            'vuln_findings': [
-                {
-                    'type': f.vuln_type,
-                    'url': f.url,
-                    'severity': f.severity,
-                    'description': f.description,
-                    'parameter': f.parameter
-                } for f in self.vuln_findings
-            ],
+            'open_ports': self.open_ports,
+            'wayback_urls': self.wayback_urls,
             'scored_targets': [
                 {
                     'url': t.url,

@@ -11,8 +11,9 @@ A lightweight, free, and self-contained CLI tool for bug bounty reconnaissance.
 - **Cloud Storage Scanner**: Locate exposed S3, Azure, and GCP buckets.
 - **Web Crawling** - Extracts links, forms, and parameters
 - **Directory Fuzzing** - Built-in wordlist for common paths
+- **Dynamic Vuln Scanner**: Automated XSS and SQL Injection detection.
 - **Template-based Vuln Scanner**: Automated checks for common misconfigurations.
-- **Interactive HTML Reports**: Professional dashboard for all findings.
+- **Interactive HTML Reports**: Professional dashboard named after the target.
 - **Advanced Scoring**: Host/URL prioritization based on risk.
 - **Auto-Setup** - Automatically installs dependencies on first run
 
@@ -62,6 +63,10 @@ python3 cli.py takeover subdomains.txt
 
 # Only scan for cloud buckets
 python3 cli.py cloudscan example.com
+
+# Only scan for XSS/SQLi (requires endpoints file)
+python3 cli.py xss endpoints.json
+python3 cli.py sqli endpoints.json
 
 Run reconnaissance:
 ```bash

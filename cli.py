@@ -346,30 +346,10 @@ def takeover(
         console.print(f"[red]Error: {e}[/red]")
 
 
-@app.command()
-def cloudscan(
-    domain: str = typer.Argument(..., help="Target domain to scan for buckets"),
-):
-    """
-    Scan for exposed cloud storage buckets (S3/Azure/GCP).
-    """
+@app.command(name='cloudscan')
+def cloud_scan(domain: str = typer.Argument(..., help="Domain to scan for cloud buckets")):
+    """Scan for exposed cloud storage buckets (S3/Azure/GCP)"""
     from modules.cloud import run_cloud_scan
-    from utils.logger import get_logger
-    
-    logger = get_logger()
-    logger.header(f"Cloud Storage Scan - {domain}")
-    
-    try:
-        results = asyncio.run(run_cloud_scan(domain, logger=logger))
-        if not results:
-            console.print("\n[yellow]No exposed buckets found.[/yellow]\n")
-            return
-            
-        console.print(f"\n[bold red]Found {len(results)} exposed buckets![/bold red]\n")
-        for r in results:
-            console.print(f"[red]![/red] {r.url} ({r.severity.upper()})")
-            
-    except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
 
 
