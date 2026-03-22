@@ -241,6 +241,77 @@ def fuzz(
 
 
 @app.command()
+def wayback(
+    domain: str = typer.Argument(..., help="Target domain"),
+    output: Optional[str] = typer.Option(None, "-o", "--output", help="Output file"),
+):
+    """
+    Discover historical URLs using Wayback Machine.
+    """
+    from modules.wayback import find_wayback_urls
+    from utils.logger import get_logger
+    
+    logger = get_logger()
+    logger.header(f"Wayback Discovery - {domain}")
+    
+    try:
+        results = asyncio.run(find_wayback_urls(domain, logger=logger))
+        
+        console.print(f"\n[bold green]Found {len(results)} historical URLs:[/bold green]\n")
+        
+        for url in results[:50]:
+            console.print(f"  [cyan]+[/cyan] {url}")
+            
+        if len(results) > 50:
+            console.print(f"\n[dim]... and {len(results) - 50} more[/dim]")
+        
+        if output:
+            with open(output, 'w') as f:
+                f.write('\n'.join(results))
+            console.print(f"\n[green]Results saved to {output}[/green]")
+            
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+
+
+@app.command()
+def portscan(
+    host: str = typer.Argument(..., help="Target host or IP"),
+    ports: Optional[str] = typer.Option(None, "-p", "--ports", help="Comma-separated ports"),
+):
+    """
+    Scan for common open ports.
+    """
+    from modules.portscan import scan_ports
+    from utils.logger import get_logger
+    
+    logger = get_logger()
+    logger.header(f"Port Scan - {host}")
+    
+    port_list = None
+    if ports:
+        port_list = [int(p.strip()) for p in ports.split(',')]
+    
+    try:
+        results = asyncio.run(scan_ports(host, ports=port_list, logger=logger))
+        
+        if not results:
+            console.print("\n[yellow]No open ports found[/yellow]\n")
+            return
+            
+        console.print(f"\n[bold green]Found {len(results)} open ports:[/bold green]\n")
+        
+        console.print("{:<10} {:<15} {:<10} {}".format("[cyan]Port[/cyan]", "[yellow]Service[/yellow]", "[green]State[/green]", "[dim]Banner[/dim]"))
+        console.print("-" * 60)
+        
+        for r in results:
+            console.print("{:<10} {:<15} {:<10} {}".format(r.port, r.service, r.state, r.banner[:30]))
+            
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+
+
+@app.command()
 def version():
     """
     Show PhantomLite version.
@@ -262,6 +333,8 @@ def help():
         "[yellow]Commands:[/yellow]\n"
         "  recon <domain>      Run full reconnaissance scan\n"
         "  subdomains <domain> Discover subdomains\n"
+        "  wayback <domain>    Discover historical URLs\n"
+        "  portscan <host>     Scan for open ports\n"
         "  livecheck <domains> Check which hosts are live\n"
         "  crawl <url>         Crawl a website\n"
         "  fuzz <url>          Fuzz directories\n"

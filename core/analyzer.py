@@ -1,11 +1,11 @@
 """
-PhantomLite Analyzer Module
-Analyzes collected data to identify high-value targets and potential vulnerabilities.
+PhantomLite Smart Analyzer Module (Enhanced)
+Analyzes collected data to identify high-value targets and generate actionable suggestions.
 """
 from typing import List, Dict, Set, Any, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import urlparse, parse_qs
-from utils.helpers import is_login_form, has_input_fields, is_sensitive_path, is_sensitive_param
+from utils.dedup import Deduplicator
 
 
 @dataclass
@@ -14,301 +14,391 @@ class AnalysisResult:
     target_type: str
     score: int
     suggestions: List[str]
-    details: Dict[str, Any]
+    details: Dict[str, Any] = field(default_factory=dict)
+    vuln_type: str = ""
+
+
+class HeuristicEngine:
+    IDOR_PATTERNS = [
+        (['id', 'user_id', 'post_id', 'item_id', 'product_id', 'category_id', 'order_id', 'transaction_id'], 
+         "ID parameter detected - test for IDOR vulnerability"),
+        (['uid', 'pid', 'cid', 'eid', 'aid', 'sid', 'rid', 'bid'],
+         "Numeric ID parameter - test for IDOR by manipulating the value"),
+        (['profile', 'account', 'user', 'member', 'profile_id'],
+         "User-related ID - test for horizontal/vertical privilege escalation"),
+    ]
+    
+    XSS_PATTERNS = [
+        (['q', 'query', 'search', 'term', 'keyword', 's', 'find', 'filter'],
+         "Search/filter parameter - test for reflected XSS"),
+        (['comment', 'message', 'msg', 'content', 'body', 'text', 'desc', 'description'],
+         "Text input parameter - test for stored XSS"),
+        (['name', 'title', 'subject', 'headline'],
+         "Name field - test for XSS in displayed content"),
+        (['email', 'url', 'link', 'website'],
+         "Input may be reflected - test for XSS"),
+    ]
+    
+    SSRF_PATTERNS = [
+        (['url', 'uri', 'link', 'src', 'source', 'dest', 'redirect', 'next', 'data'],
+         "URL parameter detected - test for SSRF vulnerability"),
+        (['host', 'port', 'path', 'callback', 'return', 'page'],
+         "Host-related parameter - test for SSRF by providing internal URLs"),
+        (['ip', 'addr', 'server', 'domain', 'hostname'],
+         "Server address parameter - test for SSRF against internal services"),
+    ]
+    
+    OPEN_REDIRECT_PATTERNS = [
+        (['redirect', 'url', 'next', 'return', 'continue', 'callback', 'destination'],
+         "Redirect parameter - test for open redirect vulnerability"),
+        (['goto', 'to', 'out', 'view', 'destination'],
+         "Navigation parameter - test for open redirect"),
+        (['ref', 'referer', 'forward', 'back'],
+         "Referrer parameter - test for redirect manipulation"),
+    ]
+    
+    LFI_PATTERNS = [
+        (['file', 'path', 'include', 'require', 'load', 'template', 'view', 'page', 'doc'],
+         "File-related parameter - test for LFI/RFI vulnerability"),
+        (['dir', 'folder', 'directory', 'folder', 'prefix', 'suffix'],
+         "Directory parameter - test for path traversal"),
+        (['name', 'filename', 'filepath', 'file_path', 'document'],
+         "Filename parameter - test for LFI with null byte injection"),
+    ]
+    
+    SQLI_PATTERNS = [
+        (['id', 'sort', 'order', 'filter', 'search', 'query', 'page', 'per_page'],
+         "Query parameter - test for SQL injection"),
+        (['user', 'name', 'cat', 'type', 'status', 'role'],
+         "Filter parameter - test for boolean-based SQL injection"),
+    ]
+    
+    SENSITIVE_PATHS = [
+        ('admin', 'Admin panel - test for authentication bypass and IDOR'),
+        ('login', 'Login page - test for credential stuffing and brute force'),
+        ('auth', 'Authentication endpoint - test for auth bypass vulnerabilities'),
+        ('api', 'API endpoint - test for authorization issues and rate limiting'),
+        ('upload', 'File upload functionality - test for arbitrary file upload'),
+        ('dashboard', 'Dashboard - test for information disclosure and IDOR'),
+        ('config', 'Configuration page - may expose sensitive settings'),
+        ('backup', 'Backup directory - test for backup file disclosure'),
+        ('debug', 'Debug endpoint - test for information disclosure'),
+        ('test', 'Test endpoint - test for debug functionality'),
+        ('wp-admin', 'WordPress admin - test for authentication bypass'),
+        ('phpmyadmin', 'phpMyAdmin - test for unauthorized access'),
+        ('.env', 'Environment file - test for credential disclosure'),
+        ('.git', 'Git repository - test for source code disclosure'),
+    ]
+    
+    SENSITIVE_PARAMS = [
+        'password', 'passwd', 'pwd', 'secret', 'token', 'api_key', 'apikey',
+        'auth', 'private', 'credential', 'access_token', 'refresh_token',
+        'ssn', 'credit_card', 'cvv', 'pin'
+    ]
+    
+    def __init__(self, logger=None):
+        self.logger = logger
+        self.dedup = Deduplicator()
+        self.results: List[AnalysisResult] = []
+    
+    def analyze_endpoint(self, endpoint: Dict) -> AnalysisResult:
+        path = endpoint.get('path', '')
+        params = endpoint.get('params', [])
+        url = endpoint.get('url', '')
+        method = endpoint.get('method', 'GET')
+        is_sensitive = endpoint.get('is_sensitive', False)
+        
+        suggestions = []
+        score = 0
+        target_type = "General"
+        
+        path_lower = path.lower()
+        params_lower = [p.lower() for p in params]
+        
+        for patterns, suggestion in self.IDOR_PATTERNS:
+            if any(p in params_lower for p in patterns):
+                suggestions.append(f"[!] {suggestion}")
+                score += 40
+                if not target_type or target_type == "General":
+                    target_type = "IDOR Target"
+                break
+        
+        for patterns, suggestion in self.XSS_PATTERNS:
+            if any(p in params_lower for p in patterns):
+                suggestions.append(f"[!] {suggestion}")
+                score += 35
+                if target_type == "General":
+                    target_type = "XSS Target"
+                break
+        
+        for patterns, suggestion in self.SSRF_PATTERNS:
+            if any(p in params_lower for p in patterns):
+                suggestions.append(f"[!] {suggestion}")
+                score += 45
+                if target_type == "General":
+                    target_type = "SSRF Target"
+                break
+        
+        for patterns, suggestion in self.OPEN_REDIRECT_PATTERNS:
+            if any(p in params_lower for p in patterns):
+                suggestions.append(f"[!] {suggestion}")
+                score += 30
+                if target_type == "General":
+                    target_type = "Open Redirect Target"
+                break
+        
+        for patterns, suggestion in self.LFI_PATTERNS:
+            if any(p in params_lower for p in patterns):
+                suggestions.append(f"[!] {suggestion}")
+                score += 50
+                if target_type == "General":
+                    target_type = "LFI Target"
+                break
+        
+        for patterns, suggestion in self.SQLI_PATTERNS:
+            if any(p in params_lower for p in patterns):
+                suggestions.append(f"[!] {suggestion}")
+                score += 45
+                if target_type == "General":
+                    target_type = "SQLi Target"
+                break
+        
+        for sensitive_path, suggestion in self.SENSITIVE_PATHS:
+            if sensitive_path in path_lower:
+                suggestions.append(f"[!] {suggestion}")
+                score += 30
+                if target_type == "General":
+                    target_type = "Sensitive Endpoint"
+                break
+        
+        for sensitive_param in self.SENSITIVE_PARAMS:
+            if sensitive_param in params_lower:
+                suggestions.append(f"[!] Sensitive parameter '{sensitive_param}' - handle with care")
+                score += 20
+        
+        if endpoint.get('has_params') and len(params) > 3:
+            suggestions.append("[!] Multiple parameters - test for parameter pollution")
+            score += 20
+        
+        if method == 'POST':
+            suggestions.append("[!] POST endpoint - test for CSRF and parameter tampering")
+            score += 15
+        
+        if 'api' in path_lower or 'graphql' in path_lower or 'rest' in path_lower:
+            suggestions.append("[!] API endpoint - test for authorization, rate limiting, and IDOR")
+            score += 50
+            target_type = "API Endpoint"
+        
+        if score == 0 and is_sensitive:
+            score = 30
+            target_type = "Sensitive Path"
+        
+        score = min(score, 100)
+        
+        return AnalysisResult(
+            target=url or path,
+            target_type=target_type,
+            score=score,
+            suggestions=suggestions,
+            details={
+                'path': path,
+                'method': method,
+                'params': params,
+                'has_params': endpoint.get('has_params', False),
+                'is_sensitive': is_sensitive,
+                'sources': endpoint.get('sources', ['unknown'])
+            }
+        )
+    
+    def analyze_form(self, form: Dict, base_url: str) -> AnalysisResult:
+        action = form.get('action', '')
+        inputs = form.get('inputs', [])
+        method = form.get('method', 'GET').upper()
+        
+        input_names = [inp.get('name', '').lower() for inp in inputs]
+        input_types = [inp.get('type', 'text').lower() for inp in inputs]
+        
+        suggestions = []
+        score = 0
+        target_type = "Form"
+        
+        has_password = any(t == 'password' for t in input_types)
+        has_file = any(t == 'file' for t in input_types)
+        has_email = any('email' in name for name in input_names)
+        
+        if has_password:
+            suggestions.append("[!] Login form detected - test for credential stuffing, brute force, and account takeover")
+            score += 70
+            target_type = "Login Form"
+        
+        if has_file:
+            suggestions.append("[!] File upload form - test for arbitrary file upload, webshell upload, and mime-type bypass")
+            score += 90
+            target_type = "File Upload"
+        
+        if has_email:
+            suggestions.append("[!] Email field - test for email enumeration via response differences")
+            score += 20
+        
+        csrf_safe = any('csrf' in name or 'token' in name or 'nonce' in name for name in input_names)
+        if not csrf_safe:
+            suggestions.append("[!] No CSRF protection detected - forms may be vulnerable to CSRF attacks")
+            score += 25
+        
+        text_inputs = [name for name, t in zip(input_names, input_types) 
+                       if t in ['text', 'search', 'textarea']]
+        if text_inputs:
+            suggestions.append("[!] Text inputs detected - test for XSS and injection vulnerabilities")
+            score += 30
+        
+        hidden_inputs = any(t == 'hidden' for t in input_types)
+        if hidden_inputs:
+            suggestions.append("[!] Hidden inputs detected - test for parameter tampering")
+            score += 15
+        
+        return AnalysisResult(
+            target=action or base_url,
+            target_type=target_type,
+            score=score,
+            suggestions=suggestions,
+            details={
+                'method': method,
+                'inputs': inputs,
+                'input_count': len(inputs),
+                'has_password': has_password,
+                'has_file': has_file
+            }
+        )
+    
+    def analyze_all(
+        self,
+        endpoints: List[Dict],
+        forms: List[Dict] = None,
+        vuln_findings: List = None,
+        js_endpoints: List[Dict] = None
+    ) -> List[AnalysisResult]:
+        results = []
+        
+        for endpoint in endpoints:
+            result = self.analyze_endpoint(endpoint)
+            results.append(result)
+        
+        if forms:
+            for form in forms:
+                result = self.analyze_form(form, '')
+                results.append(result)
+        
+        if js_endpoints:
+            for endpoint in js_endpoints:
+                result = self.analyze_endpoint({
+                    **endpoint,
+                    'url': endpoint.get('path', ''),
+                    'has_params': False,
+                    'is_sensitive': any(kw in endpoint.get('path', '').lower() 
+                                        for kw in ['admin', 'api', 'auth', 'upload', 'debug'])
+                })
+                results.append(result)
+        
+        if vuln_findings:
+            for finding in vuln_findings:
+                vuln_type = getattr(finding, 'vuln_type', 'Unknown')
+                severity = getattr(finding, 'severity', 'low')
+                
+                severity_score = {'high': 80, 'medium': 50, 'low': 30}.get(severity, 30)
+                
+                results.append(AnalysisResult(
+                    target=getattr(finding, 'url', ''),
+                    target_type=vuln_type,
+                    score=severity_score,
+                    suggestions=[f"[!] {getattr(finding, 'recommendation', 'Review and remediate')}"],
+                    details={
+                        'severity': severity,
+                        'description': getattr(finding, 'description', ''),
+                        'evidence': getattr(finding, 'evidence', ''),
+                        'parameter': getattr(finding, 'parameter', '')
+                    },
+                    vuln_type=vuln_type
+                ))
+        
+        deduplicated = self._deduplicate_results(results)
+        
+        if self.logger:
+            high_value = [r for r in deduplicated if r.score >= 50]
+            self.logger.success(f"Analysis complete: {len(deduplicated)} targets, {len(high_value)} high-value")
+        
+        return deduplicated
+    
+    def _deduplicate_results(self, results: List[AnalysisResult]) -> List[AnalysisResult]:
+        seen = {}
+        unique = []
+        
+        for result in results:
+            key = f"{result.target}:{result.target_type}"
+            if key not in seen or seen[key].score < result.score:
+                seen[key] = result
+        
+        return list(seen.values())
+    
+    def get_high_value_targets(self, results: List[AnalysisResult], threshold: int = 40) -> List[AnalysisResult]:
+        return [r for r in results if r.score >= threshold]
+    
+    def get_suggestions_by_category(self, results: List[AnalysisResult]) -> Dict[str, List[str]]:
+        categories = {
+            'IDOR': [],
+            'XSS': [],
+            'SQLi': [],
+            'Open Redirect': [],
+            'SSRF': [],
+            'LFI': [],
+            'File Upload': [],
+            'CSRF': [],
+            'API': [],
+            'Other': []
+        }
+        
+        for result in results:
+            target_type = result.target_type.lower()
+            
+            if 'idor' in target_type:
+                categories['IDOR'].extend(result.suggestions)
+            elif 'xss' in target_type:
+                categories['XSS'].extend(result.suggestions)
+            elif 'sqli' in target_type or 'sql' in target_type:
+                categories['SQLi'].extend(result.suggestions)
+            elif 'redirect' in target_type:
+                categories['Open Redirect'].extend(result.suggestions)
+            elif 'ssrf' in target_type:
+                categories['SSRF'].extend(result.suggestions)
+            elif 'lfi' in target_type or 'rfi' in target_type:
+                categories['LFI'].extend(result.suggestions)
+            elif 'upload' in target_type:
+                categories['File Upload'].extend(result.suggestions)
+            elif 'csrf' in target_type:
+                categories['CSRF'].extend(result.suggestions)
+            elif 'api' in target_type:
+                categories['API'].extend(result.suggestions)
+            else:
+                categories['Other'].extend(result.suggestions)
+        
+        return {k: v for k, v in categories.items() if v}
 
 
 class Analyzer:
     def __init__(self, logger=None):
         self.logger = logger
-        self.results: List[AnalysisResult] = []
+        self.heuristic = HeuristicEngine(logger)
     
-    def analyze_crawl_results(self, crawl_results: List) -> List[AnalysisResult]:
-        if self.logger:
-            self.logger.scan("Analyzing crawled pages...")
-        
-        results = []
-        
-        for result in crawl_results:
-            target_type = self._determine_type(result)
-            score = self._calculate_score(result)
-            suggestions = self._generate_suggestions(result, target_type)
-            
-            analysis = AnalysisResult(
-                target=result.url if hasattr(result, 'url') else str(result),
-                target_type=target_type,
-                score=score,
-                suggestions=suggestions,
-                details={
-                    'parameters': list(result.parameters) if hasattr(result, 'parameters') else [],
-                    'forms': len(result.forms) if hasattr(result, 'forms') else 0,
-                    'inputs': len(result.inputs) if hasattr(result, 'inputs') else 0,
-                    'is_sensitive': result.is_sensitive if hasattr(result, 'is_sensitive') else False,
-                    'title': result.title if hasattr(result, 'title') else None
-                }
-            )
-            
-            results.append(analysis)
-        
-        results.sort(key=lambda x: x.score, reverse=True)
-        
-        if self.logger:
-            self.logger.success(f"Analysis complete: {len(results)} targets analyzed")
-        
-        return results
-    
-    def analyze_endpoints(self, endpoints: List[Dict]) -> List[AnalysisResult]:
-        if self.logger:
-            self.logger.scan("Analyzing endpoints...")
-        
-        results = []
-        
-        for endpoint in endpoints:
-            params = endpoint.get('params', [])
-            is_sensitive = endpoint.get('is_sensitive', False)
-            path = endpoint.get('path', '')
-            
-            score = 0
-            suggestions = []
-            
-            if any(p in ['id', 'user_id', 'post_id', 'item_id'] for p in params):
-                score += 40
-                suggestions.append("Test for IDOR vulnerability - manipulate ID parameters")
-            
-            if any(p in ['redirect', 'url', 'next', 'return'] for p in params):
-                score += 30
-                suggestions.append("Test for Open Redirect - check redirect handling")
-            
-            if any(p in ['search', 'query', 'filter', 'sort'] for p in params):
-                score += 25
-                suggestions.append("Test for SSRF/Injection - probe parameter handling")
-            
-            if any(p in ['file', 'path', 'include', 'require'] for p in params):
-                score += 50
-                suggestions.append("Test for LFI/RFI - check file inclusion")
-            
-            if len(params) > 5:
-                score += 30
-                suggestions.append("Many parameters detected - perform parameter pollution tests")
-            
-            if 'admin' in path or 'api' in path:
-                score += 50
-                suggestions.append("Sensitive endpoint discovered - investigate for auth bypass")
-            
-            if endpoint.get('method', '').upper() == 'POST':
-                score += 20
-                suggestions.append("POST endpoint - test for CSRF and parameter tampering")
-            
-            analysis = AnalysisResult(
-                target=endpoint.get('url', ''),
-                target_type=self._classify_endpoint_type(path, params),
-                score=score,
-                suggestions=suggestions,
-                details={
-                    'path': path,
-                    'method': endpoint.get('method', 'GET'),
-                    'parameters': params,
-                    'is_sensitive': is_sensitive
-                }
-            )
-            
-            results.append(analysis)
-        
-        results.sort(key=lambda x: x.score, reverse=True)
-        
-        if self.logger:
-            self.logger.success(f"Endpoint analysis complete: {len(results)} endpoints analyzed")
-        
-        return results
-    
-    def analyze_forms(self, forms: List[Dict], base_url: str) -> List[AnalysisResult]:
-        if self.logger:
-            self.logger.scan("Analyzing forms...")
-        
-        results = []
-        
-        for form in forms:
-            action = form.get('action', '')
-            inputs = form.get('inputs', [])
-            method = form.get('method', 'GET').upper()
-            
-            score = 0
-            suggestions = []
-            
-            input_names = [inp.get('name', '').lower() for inp in inputs]
-            
-            if any('password' in name for name in input_names):
-                score += 50
-                suggestions.append("Password field detected - test for credential stuffing and brute force")
-                suggestions.append("Check for proper password policy enforcement")
-            
-            if any('email' in name or 'mail' in name for name in input_names):
-                score += 30
-                suggestions.append("Email field detected - test for email enumeration")
-            
-            if any('username' in name or 'user' in name for name in input_names):
-                score += 30
-                suggestions.append("Username field detected - test for username enumeration")
-            
-            if 'token' not in ' '.join(input_names) and 'csrf' not in ' '.join(input_names):
-                score += 25
-                suggestions.append("No CSRF token detected - forms may be vulnerable to CSRF")
-            
-            if method == 'POST' and len(inputs) > 0:
-                score += 20
-                suggestions.append("POST form without CSRF protection - potential CSRF vulnerability")
-            
-            for inp in inputs:
-                inp_name = inp.get('name', '').lower()
-                if any(xss_indicator in inp_name for xss_indicator in ['comment', 'message', 'content', 'body', 'text']):
-                    score += 35
-                    suggestions.append(f"Text input '{inp.get('name')}' - potential XSS vector")
-            
-            analysis = AnalysisResult(
-                target=action or base_url,
-                target_type="Form",
-                score=score,
-                suggestions=suggestions,
-                details={
-                    'method': method,
-                    'inputs': inputs,
-                    'input_count': len(inputs)
-                }
-            )
-            
-            results.append(analysis)
-        
-        results.sort(key=lambda x: x.score, reverse=True)
-        
-        if self.logger:
-            self.logger.success(f"Form analysis complete: {len(results)} forms analyzed")
-        
-        return results
-    
-    def identify_high_value_targets(
+    def analyze(
         self,
-        analysis_results: List[AnalysisResult],
-        vuln_findings: List = None
+        endpoints: List[Dict],
+        forms: List[Dict] = None,
+        vuln_findings: List = None,
+        js_endpoints: List[Dict] = None
     ) -> List[AnalysisResult]:
-        high_value = []
-        
-        for result in analysis_results:
-            if result.score >= 40:
-                high_value.append(result)
-        
-        if vuln_findings:
-            for finding in vuln_findings:
-                if hasattr(finding, 'severity') and finding.severity in ['high', 'medium']:
-                    high_value.append(AnalysisResult(
-                        target=finding.url,
-                        target_type=finding.vuln_type,
-                        score=80 if finding.severity == 'high' else 50,
-                        suggestions=[finding.recommendation],
-                        details={'finding': str(finding)}
-                    ))
-        
-        high_value.sort(key=lambda x: x.score, reverse=True)
-        
-        return high_value[:20]
+        return self.heuristic.analyze_all(endpoints, forms, vuln_findings, js_endpoints)
     
-    def _determine_type(self, result) -> str:
-        url = result.url if hasattr(result, 'url') else str(result)
-        path = urlparse(url).path.lower()
-        
-        if 'login' in path or 'signin' in path:
-            return "Login Page"
-        if 'admin' in path or 'dashboard' in path:
-            return "Admin Panel"
-        if 'api' in path:
-            return "API Endpoint"
-        if 'search' in path or 'query' in path:
-            return "Search Interface"
-        if 'upload' in path or 'file' in path:
-            return "File Upload"
-        if 'register' in path or 'signup' in path:
-            return "Registration Page"
-        if 'profile' in path or 'account' in path:
-            return "User Profile"
-        if 'password' in path or 'reset' in path:
-            return "Password Recovery"
-        
-        if hasattr(result, 'forms') and len(result.forms) > 0:
-            return "Form Page"
-        if hasattr(result, 'parameters') and len(result.parameters) > 0:
-            return "Parameterized Page"
-        
-        return "Standard Page"
+    def get_high_value_targets(self, results: List[AnalysisResult], threshold: int = 40) -> List[AnalysisResult]:
+        return self.heuristic.get_high_value_targets(results, threshold)
     
-    def _calculate_score(self, result) -> int:
-        score = 0
-        
-        if hasattr(result, 'is_sensitive') and result.is_sensitive:
-            score += 50
-        
-        if hasattr(result, 'forms') and len(result.forms) > 0:
-            score += 30
-        
-        if hasattr(result, 'inputs') and len(result.inputs) > 0:
-            score += 20 * min(len(result.inputs), 5)
-        
-        if hasattr(result, 'parameters'):
-            params = result.parameters
-            score += 40 if len(params) >= 3 else 20 * len(params)
-            
-            for param in params:
-                if is_sensitive_param(param):
-                    score += 20
-        
-        if hasattr(result, 'url'):
-            path = urlparse(result.url).path
-            if any(kw in path for kw in ['admin', 'api', 'login', 'auth', 'dashboard']):
-                score += 30
-        
-        return min(score, 100)
-    
-    def _generate_suggestions(self, result, target_type: str) -> List[str]:
-        suggestions = []
-        
-        if target_type == "Login Page":
-            suggestions.append("Test for SQL injection in login form")
-            suggestions.append("Check for brute force protection")
-            suggestions.append("Look for credential stuffing protections")
-        
-        if target_type == "Admin Panel":
-            suggestions.append("Test for authentication bypass")
-            suggestions.append("Check for IDOR in admin functions")
-            suggestions.append("Look for privilege escalation vectors")
-        
-        if target_type == "API Endpoint":
-            suggestions.append("Test for rate limiting")
-            suggestions.append("Check for authorization issues")
-            suggestions.append("Look for information disclosure")
-        
-        if hasattr(result, 'parameters') and len(result.parameters) > 0:
-            suggestions.append("Test all parameters for injection vulnerabilities")
-            suggestions.append("Check for parameter pollution")
-        
-        if hasattr(result, 'forms') and len(result.forms) > 0:
-            suggestions.append("Test forms for CSRF")
-            suggestions.append("Check input validation")
-        
-        return suggestions[:5]
-    
-    def _classify_endpoint_type(self, path: str, params: List[str]) -> str:
-        path_lower = path.lower()
-        
-        if 'login' in path_lower or 'signin' in path_lower:
-            return "Authentication"
-        if 'admin' in path_lower:
-            return "Administration"
-        if 'api' in path_lower:
-            return "API"
-        if 'user' in path_lower or 'profile' in path_lower:
-            return "User Data"
-        if 'search' in path_lower or 'query' in path_lower:
-            return "Search"
-        if 'file' in path_lower or 'upload' in path_lower:
-            return "File Handling"
-        if any(p in params for p in ['id', 'user_id', 'item_id']):
-            return "Resource Access"
-        
-        return "General"
+    def get_suggestions(self, results: List[AnalysisResult]) -> Dict[str, List[str]]:
+        return self.heuristic.get_suggestions_by_category(results)
