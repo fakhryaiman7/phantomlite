@@ -5,10 +5,12 @@ A lightweight, free, and self-contained CLI tool for bug bounty reconnaissance.
 ## Features
 
 - **Subdomain Discovery** - Uses crt.sh, HackerTarget, RapidDNS, and more
+- **Wayback Machine Integration** - Discovers historical URLs and endpoints
+- **Async Port Scanning** - Fast detection of open ports and services
 - **Live Host Checking** - Async HTTP checks with status detection
 - **Web Crawling** - Extracts links, forms, and parameters
 - **Directory Fuzzing** - Built-in wordlist for common paths
-- **Vulnerability Checks** - Basic checks for XSS, open redirect, missing headers
+- **Template-based Scanning** - Nuclei-lite engine for automated flaw detection (XSS, SQLi, .env, .git)
 - **Target Analysis** - Scores and prioritizes targets
 - **Auto-Setup** - Automatically installs dependencies on first run
 
@@ -56,15 +58,19 @@ python cli.py recon example.com --depth 3 --threads 30
 
 Individual modules:
 ```bash
-python cli.py subdomains example.com
-python cli.py livecheck domains.txt
-python cli.py crawl https://example.com
-python cli.py fuzz https://example.com
+python3 cli.py subdomains example.com
+python3 cli.py wayback example.com
+python3 cli.py portscan example.com
+python3 cli.py livecheck domains.txt
+python3 cli.py crawl https://example.com
+python3 cli.py fuzz https://example.com
 ```
 
 Commands:
-- `recon` - Full reconnaissance scan
+- `recon` - Full automated reconnaissance scan (includes all modules)
 - `subdomains` - Discover subdomains
+- `wayback` - Discover historical URLs from Archive.org
+- `portscan` - Scan for common open ports
 - `livecheck` - Check live hosts
 - `crawl` - Crawl a website
 - `fuzz` - Directory fuzzing
