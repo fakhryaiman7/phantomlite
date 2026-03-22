@@ -19,10 +19,31 @@ A lightweight, free, and self-contained CLI tool for bug bounty reconnaissance.
 
 ## Installation
 
-```bash
-git clone <repo>
-cd phantomlite
-```
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/fakhryaiman7/phantomlite.git
+   cd phantomlite
+   ```
+
+2. **Create a virtual environment:**
+   ```bash
+   python3 -m venv venv
+   ```
+
+3. **Activate the virtual environment:**
+   - **Linux/macOS:**
+     ```bash
+     source venv/bin/activate
+     ```
+   - **Windows:**
+     ```powershell
+     .\venv\Scripts\activate
+     ```
+
+4. **Install dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
 
 ## Usage
 
