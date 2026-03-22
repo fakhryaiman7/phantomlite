@@ -350,26 +350,81 @@ def takeover(
 def cloud_scan(domain: str = typer.Argument(..., help="Domain to scan for cloud buckets")):
     """Scan for exposed cloud storage buckets (S3/Azure/GCP)"""
     from modules.cloud import run_cloud_scan
+    from utils.logger import get_logger
+    
+    logger = get_logger()
+    logger.section(f"Cloud Storage Scan: {domain}")
+    
+    async def _run():
+        findings = await run_cloud_scan(domain, logger=logger)
+        if not findings:
+            logger.info("No exposed cloud buckets found.")
+            
+    try:
+        asyncio.run(_run())
+    except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
 
+@app.command(name='xss')
+def xss_scan(file: str = typer.Argument(..., help="File containing endpoints with parameters (JSON format)")):
+    """Scan endpoints for reflected XSS vulnerabilities"""
+    import json
+    from modules.xss_scanner import run_xss_scan
+    from utils.logger import get_logger
+    
+    logger = get_logger()
+    logger.section(f"XSS Vulnerability Scan")
+    
+    try:
+        with open(file, 'r') as f:
+            endpoints = json.load(f)
+    except Exception as e:
+        console.print(f"[red]Error loading endpoints: {e}[/red]")
+        return
+
+    async def _run():
+        findings = await run_xss_scan(endpoints, logger=logger)
+        if not findings:
+            logger.info("No XSS vulnerabilities found.")
+            
+    asyncio.run(_run())
+
+@app.command(name='sqli')
+def sqli_scan(file: str = typer.Argument(..., help="File containing endpoints with parameters (JSON format)")):
+    """Scan endpoints for error-based SQL Injection vulnerabilities"""
+    import json
+    from modules.sqli_scanner import run_sqli_scan
+    from utils.logger import get_logger
+    
+    logger = get_logger()
+    logger.section(f"SQL Injection Scan")
+    
+    try:
+        with open(file, 'r') as f:
+            endpoints = json.load(f)
+    except Exception as e:
+        console.print(f"[red]Error loading endpoints: {e}[/red]")
+        return
+
+    async def _run():
+        findings = await run_sqli_scan(endpoints, logger=logger)
+        if not findings:
+            logger.info("No SQL Injection vulnerabilities found.")
+            
+    asyncio.run(_run())
 
 @app.command()
 def version():
-    """
-    Show PhantomLite version.
-    """
+    """Show PhantomLite version"""
     console.print(Panel(
-        "[bold cyan]PhantomLite v1.0.0[/bold cyan]\n"
-        "[dim]Lightweight Bug Bounty Reconnaissance Tool[/dim]",
+        "[bold cyan]PhantomLite v1.2.0[/bold cyan]\n"
+        "[dim]Professional Bug Bounty Recon Tool[/dim]",
         border_style="cyan"
     ))
 
-
 @app.command()
 def help():
-    """
-    Show help and usage information.
-    """
+    """Show help and usage information"""
     console.print(Panel(
         "[bold cyan]PhantomLite - Usage Guide[/bold cyan]\n\n"
         "[yellow]Commands:[/yellow]\n"
@@ -379,17 +434,13 @@ def help():
         "  portscan <host>     Scan for open ports\n"
         "  takeover <domain>   Check for subdomain takeovers\n"
         "  cloudscan <domain>  Scan for exposed cloud buckets\n"
-        "  livecheck <domains> Check which hosts are live\n"
-        "  crawl <url>         Crawl a website\n"
-        "  fuzz <url>          Fuzz directories\n"
-        "  version             Show version\n"
+        "  xss <file.json>     Scan parameters for XSS\n"
+        "  sqli <file.json>    Scan parameters for SQLi\n"
+        "  livecheck <file>    Check which hosts are live\n"
         "\n[yellow]Options:[/yellow]\n"
-        "  -o, --output        Output directory/file\n"
-        "  -d, --depth         Crawl depth\n"
-        "  -p, --pages         Max pages to crawl\n"
-        "  -t, --threads       Concurrent threads\n"
-        "  --fast              Fast mode\n"
-        "  -v, --verbose       Verbose output\n"
+        "  --fast              Fast mode (skip heavy scans)\n"
+        "  --depth <n>         Crawl depth (default: 2)\n"
+        "  --threads <n>       Concurrent threads\n"
         "\n[red]WARNING: Use only on authorized targets![/red]",
         border_style="cyan"
     ))
