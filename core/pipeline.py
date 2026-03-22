@@ -605,7 +605,16 @@ class ReconPipeline:
                 } for ep in self.endpoints
             ],
             'js_endpoints': self.js_endpoints,
-            'open_ports': self.open_ports,
+            'open_ports': {
+                host: [
+                    {
+                        'port': p.port,
+                        'service': p.service,
+                        'state': p.state,
+                        'banner': p.banner
+                    } for p in ports
+                ] for host, ports in self.open_ports.items()
+            },
             'wayback_urls': self.wayback_urls,
             'scored_targets': [
                 {
