@@ -19,6 +19,9 @@ from modules.javascript import JavaScriptAnalyzer
 from modules.wayback import find_wayback_urls, WaybackScanner
 from modules.portscan import scan_ports, PortResult
 from modules.vuln_scanner import run_template_scan, TemplateScanner
+from modules.takeover import run_takeover_check, TakeoverDetector
+from modules.cloud import run_cloud_scan, CloudScanner
+from utils.report_gen import generate_html_report
 from core.analyzer import Analyzer
 from core.scorer import AdvancedScorer
 
@@ -71,6 +74,8 @@ class ReconPipeline:
         
         await self._step1_subdomain_discovery()
         await self._step1b_wayback_discovery()
+        await self._step1c_takeover_check()
+        await self._step1d_cloud_scan()
         await self._step2_live_host_check()
         await self._step2b_port_scanning()
         await self._step3_web_crawl()
@@ -130,6 +135,30 @@ class ReconPipeline:
                     'is_sensitive': False,
                     'source': 'wayback'
                 })
+
+    async def _step1c_takeover_check(self):
+        self.logger.section("Step 1c: Subdomain Takeover Check")
+        
+        # Only check subdomains (not the root domain)
+        targets = [s for s in self.subdomains if s != self.domain][:50]
+        
+        if targets:
+            findings = await run_takeover_check(targets, logger=self.logger)
+            self.vuln_findings.extend(findings)
+            
+            if findings:
+                rows = [[f.url.split('//')[-1], f.vuln_type, f.severity.upper()] for f in findings]
+                self.logger.print_table("Takeover Findings", ["Domain", "Type", "Severity"], rows, "red")
+
+    async def _step1d_cloud_scan(self):
+        self.logger.section("Step 1d: Cloud Storage Bucket Scanning")
+        
+        findings = await run_cloud_scan(self.domain, logger=self.logger)
+        self.vuln_findings.extend(findings)
+        
+        if findings:
+            rows = [[f.url, f.vuln_type, f.severity.upper()] for f in findings]
+            self.logger.print_table("Cloud Findings", ["Bucket URL", "Type", "Severity"], rows, "red")
     
     async def _step2_live_host_check(self):
         self.logger.section("Step 2: Live Host Check")
@@ -529,6 +558,14 @@ class ReconPipeline:
             with open(wayback_file, 'w') as f:
                 f.write('\n'.join(self.wayback_urls))
             self.logger.success(f"Wayback URLs saved to: {wayback_file}")
+            
+        # Generate Interactive HTML Report
+        html_file = self.output_dir / f"{base_name}_report.html"
+        try:
+            generate_html_report(report_data, str(html_file))
+            self.logger.success(f"Interactive HTML report generated: {html_file}")
+        except Exception as e:
+            self.logger.error(f"Failed to generate HTML report: {e}")
     
     def _compile_results(self) -> Dict[str, Any]:
         return {

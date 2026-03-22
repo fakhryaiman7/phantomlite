@@ -5,13 +5,15 @@ A lightweight, free, and self-contained CLI tool for bug bounty reconnaissance.
 ## Features
 
 - **Subdomain Discovery** - Uses crt.sh, HackerTarget, RapidDNS, and more
-- **Wayback Machine Integration** - Discovers historical URLs and endpoints
-- **Async Port Scanning** - Fast detection of open ports and services
-- **Live Host Checking** - Async HTTP checks with status detection
+- **Wayback Machine Integration**: Discover historical URLs and endpoints.
+- **Port Scanning**: Detect open ports and services on live hosts.
+- **Subdomain Takeover Detection**: Identify vulnerable CNAME records.
+- **Cloud Storage Scanner**: Locate exposed S3, Azure, and GCP buckets.
 - **Web Crawling** - Extracts links, forms, and parameters
 - **Directory Fuzzing** - Built-in wordlist for common paths
-- **Template-based Scanning** - Nuclei-lite engine for automated flaw detection (XSS, SQLi, .env, .git)
-- **Target Analysis** - Scores and prioritizes targets
+- **Template-based Vuln Scanner**: Automated checks for common misconfigurations.
+- **Interactive HTML Reports**: Professional dashboard for all findings.
+- **Advanced Scoring**: Host/URL prioritization based on risk.
 - **Auto-Setup** - Automatically installs dependencies on first run
 
 ## Requirements
@@ -49,9 +51,20 @@ A lightweight, free, and self-contained CLI tool for bug bounty reconnaissance.
 
 ## Usage
 
+# Run full reconnaissance (Generates HTML Report)
+python3 cli.py recon example.com
+
+# Only check subdomains
+python3 cli.py subdomains example.com
+
+# Only check for takeover
+python3 cli.py takeover subdomains.txt
+
+# Only scan for cloud buckets
+python3 cli.py cloudscan example.com
+
 Run reconnaissance:
 ```bash
-python cli.py recon example.com
 python cli.py recon example.com --fast
 python cli.py recon example.com --depth 3 --threads 30
 ```

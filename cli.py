@@ -5,6 +5,7 @@ Command-line interface using Typer.
 import typer
 from typing import Optional
 from pathlib import Path
+import os
 from rich.console import Console
 from rich.panel import Panel
 import asyncio
@@ -312,6 +313,67 @@ def portscan(
 
 
 @app.command()
+def takeover(
+    domain: str = typer.Argument(..., help="Target domain or file with subdomains"),
+):
+    """
+    Check for potential subdomain takeovers.
+    """
+    from modules.takeover import run_takeover_check
+    from utils.logger import get_logger
+    
+    logger = get_logger()
+    logger.header(f"Takeover Check - {domain}")
+    
+    # Check if domain is a file or a single domain
+    if os.path.isfile(domain):
+        with open(domain, 'r') as f:
+            targets = [line.strip() for line in f if line.strip()]
+    else:
+        targets = [domain]
+        
+    try:
+        results = asyncio.run(run_takeover_check(targets, logger=logger))
+        if not results:
+            console.print("\n[yellow]No potential takeovers found.[/yellow]\n")
+            return
+            
+        console.print(f"\n[bold red]Found {len(results)} potential takeovers![/bold red]\n")
+        for r in results:
+            console.print(f"[red]![/red] {r.url} -> {r.description}")
+            
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+
+
+@app.command()
+def cloudscan(
+    domain: str = typer.Argument(..., help="Target domain to scan for buckets"),
+):
+    """
+    Scan for exposed cloud storage buckets (S3/Azure/GCP).
+    """
+    from modules.cloud import run_cloud_scan
+    from utils.logger import get_logger
+    
+    logger = get_logger()
+    logger.header(f"Cloud Storage Scan - {domain}")
+    
+    try:
+        results = asyncio.run(run_cloud_scan(domain, logger=logger))
+        if not results:
+            console.print("\n[yellow]No exposed buckets found.[/yellow]\n")
+            return
+            
+        console.print(f"\n[bold red]Found {len(results)} exposed buckets![/bold red]\n")
+        for r in results:
+            console.print(f"[red]![/red] {r.url} ({r.severity.upper()})")
+            
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+
+
+@app.command()
 def version():
     """
     Show PhantomLite version.
@@ -331,10 +393,12 @@ def help():
     console.print(Panel(
         "[bold cyan]PhantomLite - Usage Guide[/bold cyan]\n\n"
         "[yellow]Commands:[/yellow]\n"
-        "  recon <domain>      Run full reconnaissance scan\n"
+        "  recon <domain>      Run full automated reconnaissance scan\n"
         "  subdomains <domain> Discover subdomains\n"
         "  wayback <domain>    Discover historical URLs\n"
         "  portscan <host>     Scan for open ports\n"
+        "  takeover <domain>   Check for subdomain takeovers\n"
+        "  cloudscan <domain>  Scan for exposed cloud buckets\n"
         "  livecheck <domains> Check which hosts are live\n"
         "  crawl <url>         Crawl a website\n"
         "  fuzz <url>          Fuzz directories\n"
